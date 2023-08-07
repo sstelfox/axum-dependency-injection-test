@@ -53,7 +53,7 @@ impl DataRepo for ProdDataRepo {
 }
 
 pub async fn basic_handler() -> Response {
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
+    (StatusCode::OK, Json(serde_json::json!({"id": 100}))).into_response()
 }
 
 pub async fn data_state_handler(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
@@ -113,6 +113,13 @@ mod tests {
 
     struct MockDataRepo(Result<Data, DataRepoError>);
 
+    #[async_trait]
+    impl DataRepo for MockDataRepo {
+        async fn retrieve(&self, _id: usize) -> Result<Data, DataRepoError> {
+            self.0.clone()
+        }
+    }
+
     // Our clone implementations don't need to be in the root crate..., this is just a silly demo
     // to find what is absolutely minimal to support this
 
@@ -131,11 +138,9 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl DataRepo for MockDataRepo {
-        async fn retrieve(&self, _id: usize) -> Result<Data, DataRepoError> {
-            self.0.clone()
-        }
+    #[derive(Deserialize)]
+    struct Response {
+        id: usize,
     }
 
     #[tokio::test]
@@ -143,17 +148,12 @@ mod tests {
         let app = Router::new().route("/", get(basic_handler));
 
         let client = TestClient::new(app);
-        let res = client.get("/").send().await;
 
+        let res = client.get("/").send().await;
         assert_eq!(res.status(), StatusCode::OK);
 
-        #[derive(Deserialize)]
-        struct Response {
-            status: String,
-        }
-
         let body: Response = res.json().await;
-        assert_eq!(body.status.as_str(), "ok");
+        assert_eq!(body.id, 100);
     }
 
     #[tokio::test]
@@ -165,14 +165,9 @@ mod tests {
         let app = Router::new().route("/:id", get(data_state_handler)).with_state(app_state);
 
         let client = TestClient::new(app);
+
         let res = client.get("/50").send().await;
-
         assert_eq!(res.status(), StatusCode::OK);
-
-        #[derive(Deserialize)]
-        struct Response {
-            id: usize,
-        }
 
         let body: Response = res.json().await;
         assert_eq!(body.id, 50);
