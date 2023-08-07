@@ -143,7 +143,25 @@ mod tests {
     use axum::routing::get;
     use serde::Deserialize;
 
+    #[derive(Deserialize)]
+    struct Response {
+        id: usize,
+    }
+
     struct MockDataRepo(Result<Data, DataRepoError>);
+
+    #[tokio::test]
+    async fn test_basic_handler() {
+        let app = Router::new().route("/", get(basic_handler));
+
+        let client = TestClient::new(app);
+
+        let res = client.get("/").send().await;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body: Response = res.json().await;
+        assert_eq!(body.id, 100);
+    }
 
     #[async_trait]
     impl DataRepo for MockDataRepo {
@@ -168,24 +186,6 @@ mod tests {
                 DataRepoError::InvalidRequest => DataRepoError::InvalidRequest,
             }
         }
-    }
-
-    #[derive(Deserialize)]
-    struct Response {
-        id: usize,
-    }
-
-    #[tokio::test]
-    async fn test_basic_handler() {
-        let app = Router::new().route("/", get(basic_handler));
-
-        let client = TestClient::new(app);
-
-        let res = client.get("/").send().await;
-        assert_eq!(res.status(), StatusCode::OK);
-
-        let body: Response = res.json().await;
-        assert_eq!(body.id, 100);
     }
 
     #[tokio::test]
