@@ -111,6 +111,33 @@ mod tests {
     use axum::routing::get;
     use serde::Deserialize;
 
+    struct MockDataRepo(Result<Data, DataRepoError>);
+
+    // Our clone implementations don't need to be in the root crate..., this is just a silly demo
+    // to find what is absolutely minimal to support this
+
+    impl Clone for Data {
+        fn clone(&self) -> Self {
+            Self { id: self.id }
+        }
+    }
+
+    impl Clone for DataRepoError {
+        fn clone(&self) -> Self {
+            match self {
+                DataRepoError::NotFound => DataRepoError::NotFound,
+                DataRepoError::InvalidRequest => DataRepoError::InvalidRequest,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DataRepo for MockDataRepo {
+        async fn retrieve(&self, id: usize) -> Result<Data, DataRepoError> {
+            self.0.clone()
+        }
+    }
+
     #[tokio::test]
     async fn test_basic_handler() {
         let app = Router::new().route("/", get(basic_handler));
@@ -127,5 +154,27 @@ mod tests {
 
         let body: Response = res.json().await;
         assert_eq!(body.status.as_str(), "ok");
+    }
+
+    #[tokio::test]
+    async fn test_mocked_data_state_handler() {
+        let app_state = AppState {
+            data_repo: Arc::new(MockDataRepo(Ok(Data { id: 50 }))) as DynDataRepo,
+        };
+
+        let app = Router::new().route("/:id", get(data_state_handler)).with_state(app_state);
+
+        let client = TestClient::new(app);
+        let res = client.get("/50").send().await;
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        #[derive(Deserialize)]
+        struct Response {
+            id: usize,
+        }
+
+        let body: Response = res.json().await;
+        assert_eq!(body.id, 50);
     }
 }
