@@ -133,7 +133,7 @@ mod tests {
 
     #[async_trait]
     impl DataRepo for MockDataRepo {
-        async fn retrieve(&self, id: usize) -> Result<Data, DataRepoError> {
+        async fn retrieve(&self, _id: usize) -> Result<Data, DataRepoError> {
             self.0.clone()
         }
     }
