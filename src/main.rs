@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use axum::{Json, Router, Server};
+use axum::{async_trait, Json, Router, Server};
+use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use http::StatusCode;
+use serde::Serialize;
 use tracing::Level;
 use tracing_subscriber::{EnvFilter, Layer};
 use tracing_subscriber::layer::SubscriberExt;
@@ -12,8 +15,53 @@ use tracing_subscriber::util::SubscriberInitExt;
 #[cfg(test)]
 mod test_helpers;
 
-#[derive(Clone, Debug)]
-struct AppState {
+#[derive(Clone)]
+pub struct AppState {
+    data_repo: DynDataRepo,
+}
+
+#[async_trait]
+trait DataRepo {
+    async fn retrieve(&self, id: usize) -> Result<Data, DataRepoError>;
+}
+
+#[derive(Debug, Serialize)]
+struct Data {
+    id: usize,
+}
+
+enum DataRepoError {
+    NotFound,
+    InvalidRequest,
+}
+
+type DynDataRepo = Arc<dyn DataRepo + Send + Sync>;
+
+struct ProdDataRepo;
+
+#[async_trait]
+impl DataRepo for ProdDataRepo {
+    async fn retrieve(&self, id: usize) -> Result<Data, DataRepoError> {
+        if id >= 1_024 {
+            Err(DataRepoError::InvalidRequest)
+        } else if id > 10 {
+            Err(DataRepoError::NotFound)
+        } else {
+            Ok(Data { id })
+        }
+    }
+}
+
+pub async fn basic_handler() -> Response {
+    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
+}
+
+pub async fn data_state_handler(Path(id): Path<usize>, State(state): State<AppState>) -> Response {
+    match state.data_repo.retrieve(id).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(DataRepoError::InvalidRequest) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"status": "bad id"}))).into_response(),
+        Err(DataRepoError::NotFound) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"status": "not found"}))).into_response(),
+    }
 }
 
 #[tokio::main]
@@ -30,19 +78,16 @@ async fn main() {
 
     tracing_subscriber::registry().with(stderr_layer).init();
 
-    let app_state = AppState {
-    };
+    let data_repo = Arc::new(ProdDataRepo) as DynDataRepo;
+    let app_state = AppState { data_repo };
 
     run_server(app_state).await;
-}
-
-pub async fn basic_handler() -> Response {
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response()
 }
 
 async fn run_server(app_state: AppState) {
     let router = Router::new()
         .route("/", get(basic_handler))
+        .route("/data/:id", get(data_state_handler))
         .with_state(app_state);
 
     let service_stack = tower::ServiceBuilder::new();
