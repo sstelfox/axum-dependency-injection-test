@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{async_trait, Json, Router, Server};
-use axum::extract::{Path, State};
+use axum::extract::{FromRef, FromRequestParts, Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use http::StatusCode;
@@ -37,6 +37,30 @@ enum DataRepoError {
 
 type DynDataRepo = Arc<dyn DataRepo + Send + Sync>;
 
+impl axum::extract::FromRef<AppState> for DynDataRepo {
+    fn from_ref(state: &AppState) -> Self {
+        state.data_repo.clone()
+    }
+}
+
+pub struct StateDataRepo(DynDataRepo);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for StateDataRepo
+where
+    DynDataRepo: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        _parts: &mut http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(StateDataRepo(DynDataRepo::from_ref(state)))
+    }
+}
+
 struct ProdDataRepo;
 
 #[async_trait]
@@ -64,6 +88,13 @@ pub async fn data_state_handler(Path(id): Path<usize>, State(state): State<AppSt
     }
 }
 
+pub async fn data_extract_handler(Path(id): Path<usize>, data_repo: StateDataRepo) -> Response {
+    match data_repo.0.retrieve(id).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        _ => (StatusCode::IM_A_TEAPOT, Json(&serde_json::json!({"status": "teapot"}))).into_response(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let (non_blocking_writer, _guard) = tracing_appender::non_blocking(std::io::stderr());
@@ -88,6 +119,7 @@ async fn run_server(app_state: AppState) {
     let router = Router::new()
         .route("/", get(basic_handler))
         .route("/data/:id", get(data_state_handler))
+        .route("/pot/:id", get(data_extract_handler))
         .with_state(app_state);
 
     let service_stack = tower::ServiceBuilder::new();
@@ -171,5 +203,33 @@ mod tests {
 
         let body: Response = res.json().await;
         assert_eq!(body.id, 50);
+    }
+
+    struct FixedMock;
+
+    #[async_trait]
+    impl DataRepo for FixedMock {
+        async fn retrieve(&self, _id: usize) -> Result<Data, DataRepoError> {
+            Err(DataRepoError::NotFound)
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockState;
+
+    impl axum::extract::FromRef<MockState> for DynDataRepo {
+        fn from_ref(_state: &MockState) -> Self {
+            Arc::new(FixedMock)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mocked_extract_handler() {
+        let app = Router::new().route("/:id", get(data_extract_handler)).with_state(MockState);
+
+        let client = TestClient::new(app);
+
+        let res = client.get("/50").send().await;
+        assert_eq!(res.status(), StatusCode::IM_A_TEAPOT);
     }
 }
